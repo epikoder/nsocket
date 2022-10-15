@@ -83,6 +83,12 @@ func init() {
 		message := Message{}
 		err := json.Unmarshal(b, &message)
 		if err != nil {
+			arkRespond(s, ArkMessage{
+				Id:     uuid.New(),
+				Type:   "ark",
+				Action: "failed",
+				Reason: err.Error(),
+			})
 			return
 		}
 
@@ -91,15 +97,19 @@ func init() {
 			{
 				switch message.Action {
 				case Subscribe:
-					subscribe(getNamespace(message.Namespace), s)
+					subscribe(genNamespace(message.Namespace), s)
 				case UnSubscribe:
-					unsubscribe(getNamespace(message.Namespace), s)
+					unsubscribe(genNamespace(message.Namespace), s)
 				}
 			}
 		case _EMIT_:
 			{
 				onMessage(message.Namespace, s, message.Body)
-				arkRespond(s, message.Id)
+				arkRespond(s, ArkMessage{
+					Id:     message.Id,
+					Type:   "ark",
+					Action: "received",
+				})
 			}
 		}
 	})
@@ -127,30 +137,32 @@ func init() {
 
 func onMessage(namespace string, sess *melody.Session, message interface{}) {
 	events := nsoc.config.Namespace[Default]
-	f, ok := events[getNamespace(namespace)]
+	f, ok := events[genNamespace(namespace)]
 	if !ok {
 		return
 	}
 	f(sess, message, nsoc)
 }
 
-func arkRespond(s *melody.Session, id uuid.UUID) {
-	if b, err := json.Marshal(struct {
-		Id     uuid.UUID `json:"id"`
-		Type   string    `json:"type"`
-		Action string    `json:"action"`
-	}{id, "ark", "received"}); err == nil {
+type ArkMessage struct {
+	Id     uuid.UUID `json:"id"`
+	Type   string    `json:"type"`
+	Action string    `json:"action"`
+	Reason string    `json:"reason,omitempty"`
+}
+
+func arkRespond(s *melody.Session, m ArkMessage) {
+	if b, err := json.Marshal(m); err == nil {
 		s.Write(b)
 	}
 }
 
 func subscribe(namespace string, sess *melody.Session) {
+	nsoc.rwMutex.Lock()
 	events := nsoc.config.Namespace[Default]
 	if _, ok := events[namespace]; !ok {
 		return
 	}
-
-	nsoc.rwMutex.Lock()
 	_, ok := nsoc.Namespaces[namespace]
 	if !ok {
 		nsoc.Namespaces[namespace] = []*melody.Session{}
@@ -183,10 +195,13 @@ func unsubscribe(namespace string, sess *melody.Session) {
 func New(config Config) *NSocket {
 	if config.AllowedOrigins != nil {
 		nsoc.melody.Upgrader.CheckOrigin = func(r *http.Request) (ok bool) {
-			if arr := strings.Split(r.Header.Get("origin"), "//"); len(arr) == 2 {
-				for _, o := range config.AllowedOrigins {
-					if ok = o == arr[1]; ok {
-						return
+			origin := r.Header.Get("origin")
+			if ok = origin == ""; !ok {
+				if arr := strings.Split(origin, "//"); len(arr) == 2 {
+					for _, o := range config.AllowedOrigins {
+						if ok = o == arr[1]; ok {
+							return
+						}
 					}
 				}
 			}
@@ -194,20 +209,21 @@ func New(config Config) *NSocket {
 		}
 	}
 	nsoc.config = config
-	events := config.Namespace[Default]
-	for namespace, f := range events {
-		namespace = getNamespace(namespace)
-		nsoc.Namespaces[namespace] = []*melody.Session{}
-		events[namespace] = f
+	tmp := config.Namespace[Default]
+	events := Event{}
+	for namespace, f := range tmp {
+		ns := genNamespace(namespace)
+		nsoc.Namespaces[ns] = []*melody.Session{}
+		events[ns] = f
 	}
 	config.Namespace[Default] = events
 	return nsoc
 }
 
 func (*NSocket) Emit(v interface{}, namespace string) (err error) {
-	namespace = getNamespace(namespace)
 	nsoc.rwMutex.Lock()
-	sess, ok := nsoc.Namespaces[namespace]
+	ns := genNamespace(namespace)
+	sess, ok := nsoc.Namespaces[ns]
 	if !ok {
 		return fmt.Errorf("namespace not found")
 	}
@@ -244,14 +260,14 @@ func (*NSocket) Serve(w http.ResponseWriter, r *http.Request) (err error) {
 	return
 }
 
-func getNamespace(namespace string) (s string) {
+func genNamespace(namespace string) (s string) {
 	if namespace == Default {
 		return Default
 	}
 	if namespace == "/" || namespace == "" {
 		return Default
 	}
-	s = strings.TrimPrefix(namespace, "/")
+	s = strings.TrimPrefix(strings.TrimPrefix(namespace, Default), "/")
 	s = strings.TrimSuffix(s, "/")
 	s = Default + "/" + s
 	return

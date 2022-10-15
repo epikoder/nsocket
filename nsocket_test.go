@@ -19,7 +19,7 @@ const (
 	url                   = "ws://localhost:8000/ws"
 )
 
-func TestTnny(t *testing.T) {
+func TestNSocket(t *testing.T) {
 	type Client = struct {
 		Ctx    context.Context
 		Cancel context.CancelFunc
@@ -39,12 +39,13 @@ func TestTnny(t *testing.T) {
 			}
 			return c.Value == authKey
 		},
+		AllowedOrigins: []string{"localhost:3000", "localhost:8000"},
 		Namespace: nsocket.Namespace{
 			nsocket.Default: nsocket.Event{
 				"/": func(s *melody.Session, i interface{}, soc *nsocket.NSocket) {
 					fmt.Printf("GOT: %v from default/%v\n", i, s.RemoteAddr())
-					if err := soc.Emit(map[string]interface{}{
-						"message": "ROOT:::" + fmt.Sprintf("%v", i),
+					if err := soc.Broadcast(map[string]interface{}{
+						"message": "ROOT:::" + fmt.Sprintf("%v ------> %v", i, s.RemoteAddr()),
 					}, "/"); err != nil {
 						t.Error(err)
 					}
@@ -52,7 +53,7 @@ func TestTnny(t *testing.T) {
 				"message": func(s *melody.Session, i interface{}, soc *nsocket.NSocket) {
 					fmt.Printf("GOT::::: %v from default/%v\n", i, s.RemoteAddr())
 					if err := soc.Emit(map[string]interface{}{
-						"message": "MESSAGE:::" + fmt.Sprintf("%v", i),
+						"message": "MESSAGE:::" + fmt.Sprintf("%v ------> %v", i, s.RemoteAddr()),
 					}, "message"); err != nil {
 						t.Error(err)
 					}
@@ -80,16 +81,16 @@ func TestTnny(t *testing.T) {
 		client1 = Client{
 			ctx, cancel, conn, true,
 		}
-		// go func() {
-		// 	for {
-		// 		if client1.Status {
-		// 			v := map[string]interface{}{}
-		// 			err := conn.ReadJSON(&v)
-		// 			fmt.Println("CLIENT1 : ", v, err)
-		// 		}
-		// 		time.Sleep(time.Second * 1)
-		// 	}
-		// }()
+		go func() {
+			for {
+				if client1.Status {
+					v := map[string]interface{}{}
+					err := conn.ReadJSON(&v)
+					fmt.Println("CLIENT1 : ", v, err)
+				}
+				time.Sleep(time.Second * 1)
+			}
+		}()
 	}
 	{
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
@@ -138,7 +139,8 @@ func TestTnny(t *testing.T) {
 			continue
 		}
 		c.Conn.WriteJSON(map[string]interface{}{
-			"type":      "iosoc",
+			"id":        uuid.New(),
+			"type":      "nsocket",
 			"action":    "subscribe",
 			"namespace": "message",
 		})
@@ -147,12 +149,14 @@ func TestTnny(t *testing.T) {
 	time.Sleep(time.Second * 2)
 	for _, c := range clients {
 		c.Conn.WriteJSON(map[string]interface{}{
+			"id":   uuid.New(),
 			"type": "emit",
 			"body": "I should be received",
 		})
 	}
 	for _, c := range clients {
 		c.Conn.WriteJSON(map[string]interface{}{
+			"id":        uuid.New(),
 			"type":      "emit",
 			"body":      "I should not be received",
 			"namespace": "not-found",
@@ -160,6 +164,7 @@ func TestTnny(t *testing.T) {
 	}
 	for _, c := range clients {
 		c.Conn.WriteJSON(map[string]interface{}{
+			"id":        uuid.New(),
 			"type":      "emit",
 			"body":      "I should be received in message",
 			"namespace": "message",
@@ -170,13 +175,14 @@ func TestTnny(t *testing.T) {
 	for i, c := range clients {
 		c.Conn.WriteMessage(1, []byte(fmt.Sprintf("Hello from client %d", i+1)))
 		c.Conn.WriteJSON(map[string]interface{}{
-			"type":      "iosoc",
+			"id":        uuid.New(),
+			"type":      "nsocket",
 			"action":    "unsubscribe",
 			"namespace": "message",
 		})
 	}
 
-	time.Sleep(time.Second * 1)
+	time.Sleep(time.Second * 2)
 	for _, c := range clients {
 		c.Status = false
 		c.Conn.Close()
