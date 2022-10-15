@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/epikoder/nsocket"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/olahol/melody"
 )
@@ -26,9 +27,18 @@ func TestTnny(t *testing.T) {
 		Status bool
 	}
 	var client1, client2, client3 Client
+	authKey := uuid.New().String()
+	cookie := []string{"auth=" + authKey}
 
 	mux := http.NewServeMux()
 	soc := nsocket.New(nsocket.Config{
+		AuthFunc: func(r *http.Request) (ok bool) {
+			c, err := r.Cookie("auth")
+			if err != nil {
+				return
+			}
+			return c.Value == authKey
+		},
 		Namespace: nsocket.Namespace{
 			nsocket.Default: nsocket.Event{
 				"/": func(s *melody.Session, i interface{}, soc *nsocket.NSocket) {
@@ -58,9 +68,12 @@ func TestTnny(t *testing.T) {
 	fmt.Println("starting server on: http://localhost:8000")
 	go http.ListenAndServe(":8000", mux)
 
+	var reqHeader http.Header = http.Header{
+		"Cookie": cookie,
+	}
 	{
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
-		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
 		if err != nil {
 			panic(err)
 		}
@@ -80,7 +93,7 @@ func TestTnny(t *testing.T) {
 	}
 	{
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
-		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
 		if err != nil {
 			panic(err)
 		}
@@ -100,7 +113,7 @@ func TestTnny(t *testing.T) {
 	}
 	{
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
-		conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+		conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
 		if err != nil {
 			panic(err)
 		}

@@ -32,6 +32,7 @@ type (
 
 	Config struct {
 		AllowedOrigins []string
+		AuthFunc       func(r *http.Request) bool
 		Namespace      Namespace
 	}
 )
@@ -97,8 +98,8 @@ func init() {
 			}
 		case _EMIT_:
 			{
-				clientEmit(message.Namespace, s, message.Body)
-				respondEmit(s, message.Id)
+				onMessage(message.Namespace, s, message.Body)
+				arkRespond(s, message.Id)
 			}
 		}
 	})
@@ -124,7 +125,7 @@ func init() {
 	})
 }
 
-func clientEmit(namespace string, sess *melody.Session, message interface{}) {
+func onMessage(namespace string, sess *melody.Session, message interface{}) {
 	events := nsoc.config.Namespace[Default]
 	f, ok := events[getNamespace(namespace)]
 	if !ok {
@@ -133,11 +134,12 @@ func clientEmit(namespace string, sess *melody.Session, message interface{}) {
 	f(sess, message, nsoc)
 }
 
-func respondEmit(s *melody.Session, id uuid.UUID) {
+func arkRespond(s *melody.Session, id uuid.UUID) {
 	if b, err := json.Marshal(struct {
-		Id     uuid.UUID
-		Action string
-	}{id, "received"}); err == nil {
+		Id     uuid.UUID `json:"id"`
+		Type   string    `json:"type"`
+		Action string    `json:"action"`
+	}{id, "ark", "received"}); err == nil {
 		s.Write(b)
 	}
 }
@@ -232,6 +234,10 @@ func (*NSocket) Broadcast(v interface{}, namespace string) (err error) {
 }
 
 func (*NSocket) Serve(w http.ResponseWriter, r *http.Request) (err error) {
+	if nsoc.config.AuthFunc != nil && !nsoc.config.AuthFunc(r) {
+		w.WriteHeader(401)
+		return
+	}
 	if err = nsoc.melody.HandleRequest(w, r); err != nil {
 		return
 	}
