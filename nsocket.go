@@ -39,11 +39,11 @@ type (
 
 type (
 	Message struct {
-		Id        uuid.UUID
-		Type      MessageType
-		Body      interface{}
-		Action    MessageAction
-		Namespace string
+		Id        uuid.UUID     `json:"id"`
+		Type      MessageType   `json:"type"`
+		Body      interface{}   `json:"body"`
+		Action    MessageAction `json:"action,omitempty"`
+		Namespace string        `json:"namespace,omitempty"`
 	}
 
 	MessageType   string
@@ -230,7 +230,12 @@ func (*NSocket) Emit(v interface{}, namespace string) (err error) {
 	nsoc.rwMutex.Unlock()
 	var b []byte
 	if v != nil {
-		b, err = json.Marshal(v)
+		b, err = json.Marshal(Message{
+			Id:        uuid.New(),
+			Type:      _EMIT_,
+			Body:      v,
+			Namespace: namespace,
+		})
 		if err != nil {
 			return
 		}
