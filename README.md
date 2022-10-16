@@ -50,7 +50,7 @@ soc := nsocket.New(nsocket.Config{
  })
 
  fmt.Println("starting server on: http://localhost:8000")
- go http.ListenAndServe(":8000", mux)
+ http.ListenAndServe(":8000", mux) // Start websocket server
 ```
 
 ### Note

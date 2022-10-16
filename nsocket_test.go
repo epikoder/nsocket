@@ -96,6 +96,7 @@ func TestNSocket(t *testing.T) {
 				fmt.Println(err)
 			}
 			fmt.Printf("Client:: - %v \n", v)
+			wg.Done()
 		}
 	}()
 
@@ -137,5 +138,5 @@ func TestNSocket(t *testing.T) {
 		"action":    "unsubscribe",
 		"namespace": "message",
 	})
-	time.Sleep(time.Second * 2)
+	wg.Wait()
 }
