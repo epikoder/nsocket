@@ -2,8 +2,11 @@ package nsocket_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,17 +23,12 @@ const (
 )
 
 func TestNSocket(t *testing.T) {
-	type Client = struct {
-		Ctx    context.Context
-		Cancel context.CancelFunc
-		Conn   *websocket.Conn
-		Status bool
-	}
-	var client1, client2, client3 Client
 	authKey := uuid.New().String()
 	cookie := []string{"auth=" + authKey}
 
 	mux := http.NewServeMux()
+
+	// Configure Nsocket server
 	soc := nsocket.New(nsocket.Config{
 		AuthFunc: func(r *http.Request) (ok bool) {
 			c, err := r.Cookie("auth")
@@ -43,18 +41,14 @@ func TestNSocket(t *testing.T) {
 		Namespace: nsocket.Namespace{
 			nsocket.Default: nsocket.Event{
 				"/": func(s *melody.Session, i interface{}, soc *nsocket.NSocket) {
-					fmt.Printf("GOT: %v from default/%v\n", i, s.RemoteAddr())
-					if err := soc.Broadcast(map[string]interface{}{
-						"message": "ROOT:::" + fmt.Sprintf("%v ------> %v", i, s.RemoteAddr()),
-					}, "/"); err != nil {
+					fmt.Printf("Namespace: [Default] -- GOT: %v ---- from ----  %v\n", i, s.RemoteAddr())
+					if err := soc.Broadcast("namespace:default -- " + fmt.Sprintf("%v ------> %v", i, s.RemoteAddr())); err != nil {
 						t.Error(err)
 					}
 				},
 				"message": func(s *melody.Session, i interface{}, soc *nsocket.NSocket) {
-					fmt.Printf("GOT::::: %v from default/%v\n", i, s.RemoteAddr())
-					if err := soc.Emit(map[string]interface{}{
-						"message": "MESSAGE:::" + fmt.Sprintf("%v ------> %v", i, s.RemoteAddr()),
-					}, "message"); err != nil {
+					fmt.Printf("Namespace: [Default/Message] -- GOT: %v ---- from ----  %v\n", i, s.RemoteAddr())
+					if err := soc.Emit("namespace:message -- "+fmt.Sprintf("%v ------> %v", i, s.RemoteAddr()), "message"); err != nil {
 						t.Error(err)
 					}
 				},
@@ -66,126 +60,82 @@ func TestNSocket(t *testing.T) {
 			t.Error(err)
 		}
 	})
+
 	fmt.Println("starting server on: http://localhost:8000")
 	go http.ListenAndServe(":8000", mux)
+
+	type Client = struct {
+		Ctx    context.Context
+		Cancel context.CancelFunc
+		Conn   *websocket.Conn
+	}
+	var client Client
+	var wg sync.WaitGroup
 
 	var reqHeader http.Header = http.Header{
 		"Cookie": cookie,
 	}
-	{
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
-		conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
-		if err != nil {
-			panic(err)
-		}
-		client1 = Client{
-			ctx, cancel, conn, true,
-		}
-		go func() {
-			for {
-				if client1.Status {
-					v := map[string]interface{}{}
-					err := conn.ReadJSON(&v)
-					fmt.Println("CLIENT1 : ", v, err)
-				}
-				time.Sleep(time.Second * 1)
+	ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
+	conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
+	if err != nil {
+		panic(err)
+	}
+	client = Client{
+		ctx, cancel, conn,
+	}
+	client.Conn.EnableWriteCompression(true)
+	go func() {
+		for {
+			var v interface{}
+			// err := conn.ReadJSON(&v)
+			_, b, err := client.Conn.ReadMessage()
+			if err != nil && err != io.EOF {
+				panic(err)
 			}
-		}()
-	}
-	{
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
-		conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
-		if err != nil {
-			panic(err)
+			if err = json.Unmarshal(b, &v); err != nil {
+				fmt.Println(err)
+			}
+			fmt.Printf("Client:: - %v \n", v)
 		}
-		client2 = Client{
-			ctx, cancel, conn, true,
-		}
-		// go func() {
-		// 	for {
-		// 		if client2.Status {
-		// 			v := map[string]interface{}{}
-		// 			err := conn.ReadJSON(&v)
-		// 			fmt.Println("CLIENT2 : ", v, err)
-		// 		}
-		// 		time.Sleep(time.Second * 1)
-		// 	}
-		// }()
-	}
-	{
-		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(dialAndConnectTimeout))
-		conn, _, err := websocket.DefaultDialer.Dial(url, reqHeader)
-		if err != nil {
-			panic(err)
-		}
-		client3 = Client{
-			ctx, cancel, conn, true,
-		}
-		// go func() {
-		// 	for {
-		// 		if client3.Status {
-		// 			v := map[string]interface{}{}
-		// 			err := conn.ReadJSON(&v)
-		// 			fmt.Println("CLIENT3 : ", v, err)
-		// 		}
-		// 		time.Sleep(time.Second * 1)
-		// 	}
-		// }()
-	}
-	clients := []Client{client1, client2, client3}
+	}()
 
-	for i, c := range clients {
-		if i == 2 {
-			continue
-		}
-		c.Conn.WriteJSON(map[string]interface{}{
-			"id":        uuid.New(),
-			"type":      "nsocket",
-			"action":    "subscribe",
-			"namespace": "message",
-		})
-	}
+	wg.Add(1)
+	client.Conn.WriteJSON(map[string]interface{}{
+		"id":        uuid.New(),
+		"type":      "nsocket",
+		"action":    "subscribe",
+		"namespace": "message",
+	})
 
-	time.Sleep(time.Second * 2)
-	for _, c := range clients {
-		c.Conn.WriteJSON(map[string]interface{}{
-			"id":   uuid.New(),
-			"type": "emit",
-			"body": "I should be received",
-		})
-	}
-	for _, c := range clients {
-		c.Conn.WriteJSON(map[string]interface{}{
-			"id":        uuid.New(),
-			"type":      "emit",
-			"body":      "I should not be received",
-			"namespace": "not-found",
-		})
-	}
-	for _, c := range clients {
-		c.Conn.WriteJSON(map[string]interface{}{
-			"id":        uuid.New(),
-			"type":      "emit",
-			"body":      "I should be received in message",
-			"namespace": "message",
-		})
-	}
+	wg.Add(1)
+	client.Conn.WriteJSON(map[string]interface{}{
+		"id":        uuid.New(),
+		"type":      "emit",
+		"body":      "I should not be received",
+		"namespace": "not-found",
+	})
 
-	time.Sleep(time.Second * 5)
-	for i, c := range clients {
-		c.Conn.WriteMessage(1, []byte(fmt.Sprintf("Hello from client %d", i+1)))
-		c.Conn.WriteJSON(map[string]interface{}{
-			"id":        uuid.New(),
-			"type":      "nsocket",
-			"action":    "unsubscribe",
-			"namespace": "message",
-		})
-	}
+	wg.Add(1)
+	client.Conn.WriteJSON(map[string]interface{}{
+		"id":        uuid.New(),
+		"type":      "emit",
+		"body":      "I should be received in namspace::message",
+		"namespace": "message",
+	})
 
-	time.Sleep(time.Second * 2)
-	for _, c := range clients {
-		c.Status = false
-		c.Conn.Close()
-	}
+	wg.Add(1)
+	client.Conn.WriteJSON(map[string]interface{}{
+		"id":   uuid.New(),
+		"type": "emit",
+		"body": "I should be received in namspace::default",
+	})
+
+	wg.Add(1)
+	client.Conn.WriteJSON(map[string]interface{}{
+		"id":        uuid.New(),
+		"type":      "nsocket",
+		"action":    "unsubscribe",
+		"namespace": "message",
+	})
 	time.Sleep(time.Second * 2)
 }

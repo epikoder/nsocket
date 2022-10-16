@@ -20,7 +20,7 @@ type (
 	NSocket struct {
 		rwMutex    sync.RWMutex
 		melody     *melody.Melody
-		Namespaces map[string][]*melody.Session
+		namespaces map[string][]*melody.Session
 		config     Config
 		iNSocket
 	}
@@ -60,7 +60,6 @@ const (
 
 	OnNamespaceConnected  = "OnNamespaceConnected"
 	OnNamespaceDisconnect = "OnNamespaceDisconnect"
-	// OnNamespaceClose      = "OnNamespaceClose"
 )
 
 const (
@@ -68,24 +67,81 @@ const (
 )
 
 var (
-	nsoc *NSocket = &NSocket{
-		rwMutex: sync.RWMutex{},
-		melody:  melody.New(),
-		Namespaces: map[string][]*melody.Session{
-			Default: {},
-		},
-	}
 	DefaultNSocketConfig Config = Config{}
 )
 
-func init() {
+func (nsoc *NSocket) onMessage(namespace string, sess *melody.Session, message interface{}) {
+	events := nsoc.config.Namespace[Default]
+	f, ok := events[genarateNamespace(namespace)]
+	if !ok {
+		return
+	}
+	f(sess, message, nsoc)
+}
+
+type AckMessage struct {
+	Id     uuid.UUID `json:"id"`
+	Type   string    `json:"type"`
+	Action string    `json:"action"`
+	Reason string    `json:"reason,omitempty"`
+}
+
+func (nsoc *NSocket) ackRespond(s *melody.Session, m AckMessage) {
+	if b, err := json.Marshal(m); err == nil {
+		s.Write(b)
+	}
+}
+
+func (nsoc *NSocket) subscribe(namespace string, sess *melody.Session) {
+	nsoc.rwMutex.Lock()
+	events := nsoc.config.Namespace[Default]
+	if _, ok := events[namespace]; !ok {
+		return
+	}
+	_, ok := nsoc.namespaces[namespace]
+	if !ok {
+		nsoc.namespaces[namespace] = []*melody.Session{}
+	}
+	nsoc.namespaces[namespace] = append(nsoc.namespaces[namespace], sess)
+	nsoc.rwMutex.Unlock()
+}
+
+func (nsoc *NSocket) unsubscribe(namespace string, sess *melody.Session) {
+	events := nsoc.config.Namespace[Default]
+	if _, ok := events[namespace]; !ok {
+		return
+	}
+
+	nsoc.rwMutex.Lock()
+	_socs, ok := nsoc.namespaces[namespace]
+	if !ok {
+		return
+	}
+	tmp := []*melody.Session{}
+	for _, s := range _socs {
+		if s != sess {
+			tmp = append(tmp, s)
+		}
+	}
+	nsoc.namespaces[namespace] = tmp
+	nsoc.rwMutex.Unlock()
+}
+
+func New(config Config) *NSocket {
+	nsoc := &NSocket{
+		rwMutex: sync.RWMutex{},
+		melody:  melody.New(),
+		namespaces: map[string][]*melody.Session{
+			Default: {},
+		},
+	}
 	nsoc.melody.HandleMessage(func(s *melody.Session, b []byte) {
 		message := Message{}
 		err := json.Unmarshal(b, &message)
 		if err != nil {
-			arkRespond(s, ArkMessage{
+			nsoc.ackRespond(s, AckMessage{
 				Id:     uuid.New(),
-				Type:   "ark",
+				Type:   "ack",
 				Action: "failed",
 				Reason: err.Error(),
 			})
@@ -97,17 +153,17 @@ func init() {
 			{
 				switch message.Action {
 				case Subscribe:
-					subscribe(genNamespace(message.Namespace), s)
+					nsoc.subscribe(genarateNamespace(message.Namespace), s)
 				case UnSubscribe:
-					unsubscribe(genNamespace(message.Namespace), s)
+					nsoc.unsubscribe(genarateNamespace(message.Namespace), s)
 				}
 			}
 		case _EMIT_:
 			{
-				onMessage(message.Namespace, s, message.Body)
-				arkRespond(s, ArkMessage{
+				nsoc.onMessage(message.Namespace, s, message.Body)
+				nsoc.ackRespond(s, AckMessage{
 					Id:     message.Id,
-					Type:   "ark",
+					Type:   "ack",
 					Action: "received",
 				})
 			}
@@ -133,66 +189,6 @@ func init() {
 		}
 		f(s, nil, nsoc)
 	})
-}
-
-func onMessage(namespace string, sess *melody.Session, message interface{}) {
-	events := nsoc.config.Namespace[Default]
-	f, ok := events[genNamespace(namespace)]
-	if !ok {
-		return
-	}
-	f(sess, message, nsoc)
-}
-
-type ArkMessage struct {
-	Id     uuid.UUID `json:"id"`
-	Type   string    `json:"type"`
-	Action string    `json:"action"`
-	Reason string    `json:"reason,omitempty"`
-}
-
-func arkRespond(s *melody.Session, m ArkMessage) {
-	if b, err := json.Marshal(m); err == nil {
-		s.Write(b)
-	}
-}
-
-func subscribe(namespace string, sess *melody.Session) {
-	nsoc.rwMutex.Lock()
-	events := nsoc.config.Namespace[Default]
-	if _, ok := events[namespace]; !ok {
-		return
-	}
-	_, ok := nsoc.Namespaces[namespace]
-	if !ok {
-		nsoc.Namespaces[namespace] = []*melody.Session{}
-	}
-	nsoc.Namespaces[namespace] = append(nsoc.Namespaces[namespace], sess)
-	nsoc.rwMutex.Unlock()
-}
-
-func unsubscribe(namespace string, sess *melody.Session) {
-	events := nsoc.config.Namespace[Default]
-	if _, ok := events[namespace]; !ok {
-		return
-	}
-
-	nsoc.rwMutex.Lock()
-	_socs, ok := nsoc.Namespaces[namespace]
-	if !ok {
-		return
-	}
-	tmp := []*melody.Session{}
-	for _, s := range _socs {
-		if s != sess {
-			tmp = append(tmp, s)
-		}
-	}
-	nsoc.Namespaces[namespace] = tmp
-	nsoc.rwMutex.Unlock()
-}
-
-func New(config Config) *NSocket {
 	if config.AllowedOrigins != nil {
 		nsoc.melody.Upgrader.CheckOrigin = func(r *http.Request) (ok bool) {
 			origin := r.Header.Get("origin")
@@ -212,18 +208,18 @@ func New(config Config) *NSocket {
 	tmp := config.Namespace[Default]
 	events := Event{}
 	for namespace, f := range tmp {
-		ns := genNamespace(namespace)
-		nsoc.Namespaces[ns] = []*melody.Session{}
+		ns := genarateNamespace(namespace)
+		nsoc.namespaces[ns] = []*melody.Session{}
 		events[ns] = f
 	}
 	config.Namespace[Default] = events
 	return nsoc
 }
 
-func (*NSocket) Emit(v interface{}, namespace string) (err error) {
+func (nsoc *NSocket) Emit(v interface{}, namespace string) (err error) {
 	nsoc.rwMutex.Lock()
-	ns := genNamespace(namespace)
-	sess, ok := nsoc.Namespaces[ns]
+	ns := genarateNamespace(namespace)
+	sess, ok := nsoc.namespaces[ns]
 	if !ok {
 		return fmt.Errorf("namespace not found")
 	}
@@ -243,7 +239,7 @@ func (*NSocket) Emit(v interface{}, namespace string) (err error) {
 	return nsoc.melody.BroadcastMultiple(b, sess)
 }
 
-func (*NSocket) Broadcast(v interface{}, namespace string) (err error) {
+func (nsoc *NSocket) Broadcast(v interface{}) (err error) {
 	var b []byte
 	if v != nil {
 		b, err = json.Marshal(v)
@@ -254,7 +250,11 @@ func (*NSocket) Broadcast(v interface{}, namespace string) (err error) {
 	return nsoc.melody.Broadcast(b)
 }
 
-func (*NSocket) Serve(w http.ResponseWriter, r *http.Request) (err error) {
+func (nsoc *NSocket) Namespaces() map[string][]*melody.Session {
+	return nsoc.namespaces
+}
+
+func (nsoc *NSocket) Serve(w http.ResponseWriter, r *http.Request) (err error) {
 	if nsoc.config.AuthFunc != nil && !nsoc.config.AuthFunc(r) {
 		w.WriteHeader(401)
 		return
@@ -262,18 +262,5 @@ func (*NSocket) Serve(w http.ResponseWriter, r *http.Request) (err error) {
 	if err = nsoc.melody.HandleRequest(w, r); err != nil {
 		return
 	}
-	return
-}
-
-func genNamespace(namespace string) (s string) {
-	if namespace == Default {
-		return Default
-	}
-	if namespace == "/" || namespace == "" {
-		return Default
-	}
-	s = strings.TrimPrefix(strings.TrimPrefix(namespace, Default), "/")
-	s = strings.TrimSuffix(s, "/")
-	s = Default + "/" + s
 	return
 }
