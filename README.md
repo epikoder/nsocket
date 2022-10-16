@@ -1,6 +1,6 @@
 # NSocket
 
-## Messaging framework with with channels [rooms]
+## Messaging framework with channels [rooms]
 
 Inspired by [Socket.io](https://socket.io) and [Kataras Neffos](https://github.com/kataras/neffos)
 
