@@ -127,6 +127,22 @@ func (nsoc *NSocket) unsubscribe(namespace string, sess *melody.Session) {
 	nsoc.rwMutex.Unlock()
 }
 
+func (nsoc *NSocket) unsubscribeFromAll(sess *melody.Session) {
+	nsoc.rwMutex.Lock()
+	for i, v := range nsoc.namespaces {
+		tmp := []*melody.Session{}
+		for _, s := range v {
+			if s == sess || s.IsClosed() {
+				s.Close()
+				continue
+			}
+			tmp = append(tmp, s)
+		}
+		nsoc.namespaces[i] = tmp
+	}
+	nsoc.rwMutex.Unlock()
+}
+
 func New(config Config) *NSocket {
 	nsoc := &NSocket{
 		rwMutex: sync.RWMutex{},
@@ -182,6 +198,7 @@ func New(config Config) *NSocket {
 
 	nsoc.melody.HandleDisconnect(func(s *melody.Session) {
 		fmt.Printf("Client :%v Disconnected\n", s.RemoteAddr())
+		nsoc.unsubscribeFromAll(s)
 		events := nsoc.config.Namespace[Default]
 		f, ok := events[OnNamespaceDisconnect]
 		if !ok {
@@ -189,6 +206,7 @@ func New(config Config) *NSocket {
 		}
 		f(s, nil, nsoc)
 	})
+
 	if config.AllowedOrigins != nil {
 		nsoc.melody.Upgrader.CheckOrigin = func(r *http.Request) (ok bool) {
 			origin := r.Header.Get("origin")
