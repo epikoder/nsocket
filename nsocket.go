@@ -72,7 +72,7 @@ var (
 
 func (nsoc *NSocket) onMessage(namespace string, sess *melody.Session, message interface{}) {
 	events := nsoc.config.Namespace[Default]
-	f, ok := events[genarateNamespace(namespace)]
+	f, ok := events[resolveNamespace(namespace)]
 	if !ok {
 		return
 	}
@@ -169,9 +169,9 @@ func New(config Config) *NSocket {
 			{
 				switch message.Action {
 				case Subscribe:
-					nsoc.subscribe(genarateNamespace(message.Namespace), s)
+					nsoc.subscribe(resolveNamespace(message.Namespace), s)
 				case UnSubscribe:
-					nsoc.unsubscribe(genarateNamespace(message.Namespace), s)
+					nsoc.unsubscribe(resolveNamespace(message.Namespace), s)
 				}
 			}
 		case _EMIT_:
@@ -189,7 +189,7 @@ func New(config Config) *NSocket {
 	nsoc.melody.HandleConnect(func(s *melody.Session) {
 		fmt.Printf("Connected to :%v\n", s.RemoteAddr())
 		events := nsoc.config.Namespace[Default]
-		f, ok := events[OnNamespaceConnected]
+		f, ok := events[resolveNamespace(OnNamespaceConnected)]
 		if !ok {
 			return
 		}
@@ -200,7 +200,7 @@ func New(config Config) *NSocket {
 		fmt.Printf("Client :%v Disconnected\n", s.RemoteAddr())
 		nsoc.unsubscribeFromAll(s)
 		events := nsoc.config.Namespace[Default]
-		f, ok := events[OnNamespaceDisconnect]
+		f, ok := events[resolveNamespace(OnNamespaceDisconnect)]
 		if !ok {
 			return
 		}
@@ -226,7 +226,7 @@ func New(config Config) *NSocket {
 	tmp := config.Namespace[Default]
 	events := Event{}
 	for namespace, f := range tmp {
-		ns := genarateNamespace(namespace)
+		ns := resolveNamespace(namespace)
 		nsoc.namespaces[ns] = []*melody.Session{}
 		events[ns] = f
 	}
@@ -236,7 +236,7 @@ func New(config Config) *NSocket {
 
 func (nsoc *NSocket) Emit(v interface{}, namespace string) (err error) {
 	nsoc.rwMutex.Lock()
-	ns := genarateNamespace(namespace)
+	ns := resolveNamespace(namespace)
 	sess, ok := nsoc.namespaces[ns]
 	if !ok {
 		return fmt.Errorf("namespace not found")

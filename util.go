@@ -2,7 +2,7 @@ package nsocket
 
 import "strings"
 
-func genarateNamespace(namespace string) (s string) {
+func resolveNamespace(namespace string) (s string) {
 	if namespace == Default {
 		return Default
 	}
