@@ -197,7 +197,7 @@ func New(config Config) *NSocket {
 	})
 
 	nsoc.melody.HandleDisconnect(func(s *melody.Session) {
-		fmt.Printf("Client :%v Disconnected\n", s.RemoteAddr())
+		fmt.Printf("Client :%v Disconnected -- %s \n", s.RemoteAddr(), s.Request.Context().Err())
 		nsoc.unsubscribeFromAll(s)
 		events := nsoc.config.Namespace[Default]
 		f, ok := events[resolveNamespace(OnNamespaceDisconnect)]
@@ -234,7 +234,50 @@ func New(config Config) *NSocket {
 	return nsoc
 }
 
-func (nsoc *NSocket) Emit(v interface{}, namespace string) (err error) {
+func (nsoc *NSocket) Emit(v interface{}, i ...interface{}) (err error) {
+	var namespace string
+	var s *melody.Session
+
+	for k := 0; k < 2; k++ {
+		switch i[k].(type) {
+		case *melody.Session:
+			s = i[k].(*melody.Session)
+		case string:
+			namespace = i[k].(string)
+		}
+	}
+	nsoc.rwMutex.Lock()
+	ns := resolveNamespace(namespace)
+	sess, ok := nsoc.namespaces[ns]
+	if !ok {
+		return fmt.Errorf("namespace not found")
+	}
+	nsoc.rwMutex.Unlock()
+	if s != nil {
+		tmp := sess
+		sess = []*melody.Session{}
+		for _, ss := range tmp {
+			if ss != s {
+				sess = append(sess, s)
+			}
+		}
+	}
+	var b []byte
+	if v != nil {
+		b, err = json.Marshal(Message{
+			Id:        uuid.New(),
+			Type:      _EMIT_,
+			Body:      v,
+			Namespace: namespace,
+		})
+		if err != nil {
+			return
+		}
+	}
+	return nsoc.melody.BroadcastMultiple(b, sess)
+}
+
+func (nsoc *NSocket) EmitAll(v interface{}, namespace string) (err error) {
 	nsoc.rwMutex.Lock()
 	ns := resolveNamespace(namespace)
 	sess, ok := nsoc.namespaces[ns]
@@ -257,7 +300,18 @@ func (nsoc *NSocket) Emit(v interface{}, namespace string) (err error) {
 	return nsoc.melody.BroadcastMultiple(b, sess)
 }
 
-func (nsoc *NSocket) Broadcast(v interface{}) (err error) {
+func (nsoc *NSocket) Broadcast(v interface{}, s *melody.Session) (err error) {
+	var b []byte
+	if v != nil {
+		b, err = json.Marshal(v)
+		if err != nil {
+			return
+		}
+	}
+	return nsoc.melody.BroadcastOthers(b, s)
+}
+
+func (nsoc *NSocket) BroadcastAll(v interface{}) (err error) {
 	var b []byte
 	if v != nil {
 		b, err = json.Marshal(v)

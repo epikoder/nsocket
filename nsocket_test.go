@@ -42,7 +42,7 @@ func TestNSocket(t *testing.T) {
 			nsocket.Default: nsocket.Event{
 				"/": func(s *melody.Session, i interface{}, soc *nsocket.NSocket) {
 					fmt.Printf("Namespace: [Default] -- GOT: %v ---- from ----  %v\n", i, s.RemoteAddr())
-					if err := soc.Broadcast("namespace:default -- " + fmt.Sprintf("%v ------> %v", i, s.RemoteAddr())); err != nil {
+					if err := soc.Broadcast("namespace:default -- "+fmt.Sprintf("%v ------> %v", i, s.RemoteAddr()), s); err != nil {
 						t.Error(err)
 					}
 				},
